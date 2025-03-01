@@ -1,0 +1,122 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SAM template for MongoDB Lambda function that Query data from MongoDB for POR Model
+
+Parameters:
+  MongoDbIp:
+    Type: String
+    Description: MongoDB server IP address
+    Default: 
+  MongoDbPort:
+    Type: String
+    Description: MongoDB server port
+    Default: 
+  DbName:
+    Type: String
+    Description: MongoDB database name
+    Default: 
+  S3BucketName:
+    Type: String
+    Description: S3 bucket name for storing CSV files
+    Default: 
+  SecurityGroupId:
+    Type: String
+    Description: Security Group ID for Lambda VPC configuration
+    Default: 
+  SubnetId1:
+    Type: String
+    Description: First Subnet ID for Lambda VPC configuration
+    Default: 
+  SubnetId2:
+    Type: String
+    Description: Second Subnet ID for Lambda VPC configuration
+    Default: 
+  SubnetId3:
+    Type: String
+    Description: Third Subnet ID for Lambda VPC configuration
+    Default: 
+
+Resources:
+  RootRoleToAccessLambda:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: allow-access-to-s3-and-mongodb
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${S3BucketName}"
+                  - !Sub "arn:aws:s3:::${S3BucketName}/*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  QueryToMongoDBFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./querytoMongodb
+      Handler: index.handler
+      Runtime: nodejs18.x
+      MemorySize: 256
+      Timeout: 180
+      Environment:
+        Variables:
+          IP: !Ref MongoDbIp
+          PORT: !Ref MongoDbPort
+          DB_NAME: !Ref DbName
+          S3_BUCKET_NAME: !Ref S3BucketName
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecurityGroupId
+        SubnetIds:
+          - !Ref SubnetId1
+          - !Ref SubnetId2
+          - !Ref SubnetId3
+      Role: !GetAtt RootRoleToAccessLambda.Arn
+
+  LambdaScheduleRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Name: 'WeeklyFridayMidnightLambdaTrigger'
+      Description: 'Triggers Lambda function every Friday at 12 AM UTC'
+      ScheduleExpression: 'cron(0 0 ? * FRI *)'
+      State: 'ENABLED'
+      Targets:
+        - Arn: !GetAtt QueryToMongoDBFunction.Arn
+          Id: 'WeeklyFridayMidnightLambdaTarget'
+
+  LambdaPermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref QueryToMongoDBFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt LambdaScheduleRule.Arn
+
+Outputs:
+  QueryToMongoDBFunctionArn:
+    Description: "Query Lambda Function ARN"
+    Value: !GetAtt QueryToMongoDBFunction.Arn
